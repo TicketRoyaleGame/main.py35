@@ -8,9 +8,9 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageOps
 
-# הגדרות ראשיות - החלף את הערכים בנתונים שלך
-OWNER_ID = 123456789012345678  # מספר הזיהוי האישי שלך בדיסקורד (Discord ID)
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # הטוקן של הבוט מפורטל המפתחים
+# הגדרות ראשיות - מזהה הבעלים המעודכן שלך
+OWNER_ID = 961945951780630541
+TOKEN = "YOUR_BOT_TOKEN_HERE"  # הכנס כאן את הטוקן שלך מפורטל המפתחים
 
 DATA_FILE = "database.json"
 
@@ -29,7 +29,7 @@ class Database:
           "logs": [],  # רשימת פעולות
           "blocked": [],  # רשימת משתמשים חסומים
           "maintenance": False,  # מצב תחזוקה
-          "announcement": "",  # הודעת מערכת שתוצמת תחת תשובות
+          "announcement": "",  # הודעת מערכת שתוצג תחת תשובות
       }
       self.save()
     else:
@@ -45,11 +45,9 @@ class Database:
     self.data["logs"].insert(
         0, {"time": timestamp, "user_id": user_id, "name": username, "action": action}
     )
-    # שמירת 100 לוגים אחרונים בלבד למניעת התנפחות הקובץ
     if len(self.data["logs"]) > 100:
       self.data["logs"].pop()
 
-    # עדכון מונה שימושים למשתמש
     str_id = str(user_id)
     if str_id not in self.data["users"]:
       self.data["users"][str_id] = {"name": username, "uses": 0}
@@ -75,31 +73,25 @@ class MyDiscordApp(commands.Bot):
 bot = MyDiscordApp()
 
 
-# --- בדיקות אבטחה ותחזוקה (Middleware) ---
+# --- בדיקות אבטחה ותחזוקה ---
 @bot.tree.before_invoke
 async def check_permissions(interaction: discord.Interaction):
   user_id = interaction.user.id
 
-  # בדיקת חסימה
   if user_id in db.data["blocked"]:
     await interaction.response.send_message(
         "❌ נחסמת מהיכולת להשתמש באפליקציה זו.", ephemeral=True
     )
     raise app_commands.CheckFailure("Blocked user")
 
-  # בדיקת מצב תחזוקה (רק הבעלים יכול להשתמש)
   if db.data["maintenance"] and user_id != OWNER_ID:
     await interaction.response.send_message(
-        "🛠️ האפליקציה נמצאת כעת במצב תחזוקה ונפתחת מחדש בקרוב. נסה שוב מאוחר יותר.",
-        ephemeral=True,
+        "🛠️ האפליקציה נמצאת כעת במצב תחזוקה. נסה שוב מאוחר יותר.", ephemeral=True
     )
     raise app_commands.CheckFailure("Maintenance mode")
 
 
-# --- מחלקות אינטראקטיביות (Views & Modals) ---
-
-
-# פאנל ניהול אינטראקטיבי עם כפתורים
+# --- פאנל ניהול אינטראקטיבי ---
 class AdminPanelView(discord.ui.View):
 
   def __init__(self):
@@ -169,20 +161,17 @@ def create_admin_embed():
   embed.add_field(name="סה״כ משתמשים", value=str(total_users), inline=True)
   embed.add_field(name="סה״כ הפעלות פקודה", value=str(total_uses), inline=True)
 
-  # הצגת 5 לוגים אחרונים
   logs_text = ""
   for log in db.data["logs"][:5]:
     logs_text += f"`{log['time']}` | **{log['name']}**: {log['action']}\n"
   if not logs_text:
     logs_text = "אין פעילויות רשומות כרגע."
 
-  embed.add_field(
-      name="📋 יומן פעילות אחרון (5 שורות)", value=logs_text, inline=False
-  )
+  embed.add_field(name="📋 יומן פעילות אחרון (5 שורות)", value=logs_text, inline=False)
   return embed
 
 
-# סקר אינטראקטיבי עם כפתורים
+# --- סקר אינטראקטיבי ---
 class PollView(discord.ui.View):
 
   def __init__(self, options):
@@ -199,15 +188,12 @@ class PollView(discord.ui.View):
   def create_callback(self, option):
     async def button_callback(interaction: discord.Interaction):
       user_id = interaction.user.id
-      # הסרת הצבעה קודמת של המשתמש אם קיימת
       for opt in self.votes:
         if user_id in self.votes[opt]:
           self.votes[opt].remove(user_id)
 
-      # הוספת ההצבעה החדשה
       self.votes[option].add(user_id)
 
-      # עדכון הטקסט בסקר
       desc = "📊 **סקר חדש!** בחר באפשרות המועדפת עליך:\n\n"
       for opt, voters in self.votes.items():
         desc += f"🔹 **{opt}**: {len(voters)} קולות\n"
@@ -224,7 +210,7 @@ class PollView(discord.ui.View):
 
 @bot.tree.command(name="poll", description="צור סקר אינטראקטיבי עם כפתורים לחיצים")
 @app_commands.describe(
-    question="שאלת הסקר", options="אפשרויות מופרדות בפסיקים (למשל: תפוח,בננה,אפרסק)"
+    question="שאלת הסקר", options="אפשרויות מופרדות בפסיקים (למשל: תפוח,בננה)"
 )
 async def poll(interaction: discord.Interaction, question: str, options: str):
   db.log_action(interaction.user.id, interaction.user.name, "יצר סקר")
@@ -331,15 +317,14 @@ async def to_gif(interaction: discord.Interaction, image: discord.Attachment):
     )
 
 
-# --- פאנל הניהול הסודי (נגיש אך ורק לבעלים ב-ID) ---
+# --- פאנל ניהול סודי לבעלים ---
 @bot.tree.command(name="admin_panel", description="[סודי - לבעלים בלבד] פתח את פאנל הבקרה")
 async def admin_panel(interaction: discord.Interaction):
   if interaction.user.id != OWNER_ID:
-    # אבטחה: שליחת התראה לבעלים על ניסיון פריצה
     try:
       owner_user = await bot.fetch_user(OWNER_ID)
       await owner_user.send(
-          f"🚨 **התרעת אבטחה!** המשתמש `{interaction.user.name}` (ID: `{interaction.user.id}`) ניסה לגשת לפאנל הניהול הסודי שלך."
+          f"🚨 **התרעת אבטחה!** המשתמש `{interaction.user.name}` (ID: `{interaction.user.id}`) ניסה לגשת לפאנל הניהול."
       )
     except Exception:
       pass
@@ -355,7 +340,6 @@ async def admin_panel(interaction: discord.Interaction):
   await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
-# --- פקודת ניהול להגדרת הודעת מערכת (Announcement) ---
 @bot.tree.command(name="set_announcement", description="[סודי] הגדר הודעת מערכת שתופיע מתחת לתשובות")
 @app_commands.describe(text="הטקסט שיופיע (השאר ריק כדי לאפס)")
 async def set_announcement(interaction: discord.Interaction, text: str = ""):
@@ -370,8 +354,7 @@ async def set_announcement(interaction: discord.Interaction, text: str = ""):
   )
 
 
-# --- פקודת חסימת משתמש ---
-@bot.tree.command(name="block_user", description="[סודי] חסום משתמש סורق משימוש בבוט")
+@bot.tree.command(name="block_user", description="[סודי] חסום משתמש משימוש בבוט")
 @app_commands.describe(user_id="מספר הזיהוי (ID) של המשתמש לחסימה")
 async def block_user(interaction: discord.Interaction, user_id: str):
   if interaction.user.id != OWNER_ID:
@@ -396,5 +379,4 @@ async def block_user(interaction: discord.Interaction, user_id: str):
     )
 
 
-# הפעלת הבוט
 bot.run(TOKEN)
