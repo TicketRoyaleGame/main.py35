@@ -8,9 +8,9 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageOps
 
-# הגדרות ראשיות - מזהה הבעלים המעודכן שלך
+# הגדרות ראשיות - מזהה הבעלים שלך
 OWNER_ID = 961945951780630541
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # הכנס כאן את הטוקן שלך מפורטל המפתחים
+TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN_HERE")  # תומך במשתני סביבה או בטוקן ישיר
 
 DATA_FILE = "database.json"
 
@@ -25,11 +25,11 @@ class Database:
   def load(self):
     if not os.path.exists(self.filename):
       self.data = {
-          "users": {},  # {user_id: {"name": str, "uses": int}}
-          "logs": [],  # רשימת פעולות
-          "blocked": [],  # רשימת משתמשים חסומים
-          "maintenance": False,  # מצב תחזוקה
-          "announcement": "",  # הודעת מערכת שתוצג תחת תשובות
+          "users": {},
+          "logs": [],
+          "blocked": [],
+          "maintenance": False,
+          "announcement": "",
       }
       self.save()
     else:
@@ -58,12 +58,37 @@ class Database:
 db = Database()
 
 
+# --- מחלקה מותאמת אישית לבדיקת הרשאות ותחזוקה לכל פקודה ---
+class MyCheckCommandTree(app_commands.CommandTree):
+
+  async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    user_id = interaction.user.id
+
+    # בדיקת חסימה
+    if user_id in db.data["blocked"]:
+      await interaction.response.send_message(
+          "❌ נחסמת מהיכולת להשתמש באפליקציה זו.", ephemeral=True
+      )
+      return False
+
+    # בדיקת מצב תחזוקה
+    if db.data["maintenance"] and user_id != OWNER_ID:
+      await interaction.response.send_message(
+          "🛠️ האפליקציה נמצאת כעת במצב תחזוקה. נסה שוב מאוחר יותר.", ephemeral=True
+      )
+      return False
+
+    return True
+
+
 # --- הגדרת הבוט ---
 class MyDiscordApp(commands.Bot):
 
   def __init__(self):
     intents = discord.Intents.default()
-    super().__init__(command_prefix="!", intents=intents)
+    super().__init__(
+        command_prefix="!", intents=intents, tree_cls=MyCheckCommandTree
+    )
 
   async def setup_hook(self):
     await self.tree.sync()
@@ -71,24 +96,6 @@ class MyDiscordApp(commands.Bot):
 
 
 bot = MyDiscordApp()
-
-
-# --- בדיקות אבטחה ותחזוקה ---
-@bot.tree.before_invoke
-async def check_permissions(interaction: discord.Interaction):
-  user_id = interaction.user.id
-
-  if user_id in db.data["blocked"]:
-    await interaction.response.send_message(
-        "❌ נחסמת מהיכולת להשתמש באפליקציה זו.", ephemeral=True
-    )
-    raise app_commands.CheckFailure("Blocked user")
-
-  if db.data["maintenance"] and user_id != OWNER_ID:
-    await interaction.response.send_message(
-        "🛠️ האפליקציה נמצאת כעת במצב תחזוקה. נסה שוב מאוחר יותר.", ephemeral=True
-    )
-    raise app_commands.CheckFailure("Maintenance mode")
 
 
 # --- פאנל ניהול אינטראקטיבי ---
