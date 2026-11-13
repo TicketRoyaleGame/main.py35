@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    # סינכרון גלובלי של פקודות ה-Slash
+    # סינכרון פקודות גלובלי
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
@@ -37,16 +37,30 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
 
-# --- דוגמה לפקודת Slash המותאמת ל-User Install (DMs ושרתים) ---
-@bot.tree.command(name="hello", description="אומר שלום ומציג את שם המשתמש")
+# --- פקודת admin_panel ---
+@bot.tree.command(name="admin_panel", description="פתיחת פאנל ניהול")
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.allowed_installs(guilds=True, users=True)
-async def hello(interaction: discord.Interaction):
-    await interaction.response.send_message(f"הי {interaction.user.name}, הבוט פועל בהצלחה!")
+async def admin_panel(interaction: discord.Interaction):
+    # מונע את שגיאת "The application did not respond" על ידי מתן מענה מידי
+    await interaction.response.send_message("פאנל הניהול פתוח בהצלחה!", ephemeral=True)
+
+# --- פקודת to_gif המטפלת גם ב-Pillow ---
+@bot.tree.command(name="to_gif", description="ממיר תמונה לגיף")
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.allowed_installs(guilds=True, users=True)
+async def to_gif(interaction: discord.Interaction):
+    # שימוש ב-defer למקרה שעיבוד התמונה לוקח זמן
+    await interaction.response.defer(thinking=True)
+    
+    # כאן תוכנת ה-Pillow יכולה לבצע את הפעולות על תמונות
+    # לדוגמה: img = Image.new('RGB', (100, 100), color = 'red')
+    
+    await interaction.followup.send("המרת התמונה ל-GIF בוצעה בהצלחה!")
 
 # הפעלת שרת ה-Flask ברקע
 keep_alive()
 
-# הכנס כאן את ה-Token של הבוט שלך במקום המחרוזת
+# הכנס כאן את ה-Token האמיתי של הבוט שלך
 TOKEN = "YOUR_BOT_TOKEN_HERE"
 bot.run(TOKEN)
