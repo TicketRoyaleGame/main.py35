@@ -183,4 +183,168 @@ def create_admin_embed():
       timestamp=datetime.now(),
   )
   embed.add_field(name="System Status", value=maint_status, inline=True)
-  embed.add_field(name="Total Users
+  embed.add_field(name="Total Users", value=str(total_users), inline=True)
+  embed.add_field(name="Total Uses", value=str(total_uses), inline=True)
+
+  logs_text = ""
+  for log in db.data["logs"][:5]:
+    logs_text += f"`{log['time']}` | **{log['name']}**: {log['action']}\n"
+  if not logs_text:
+    logs_text = "No recent logs."
+
+  embed.add_field(name="Recent Activity", value=logs_text, inline=False)
+  return embed
+
+
+# --- סקר אינטראקטיבי ---
+class PollView(discord.ui.View):
+
+  def __init__(self, options):
+    super().__init__(timeout=180)
+    self.votes = {opt: set() for opt in options}
+
+    for opt in options:
+      button = discord.ui.Button(
+          label=opt, style=discord.ButtonStyle.secondary
+      )
+      button.callback = self.create_callback(opt)
+      self.add_item(button)
+
+  def create_callback(self, option):
+    async def button_callback(interaction: discord.Interaction):
+      user_id = interaction.user.id
+      for opt in self.votes:
+        if user_id in self.votes[opt]:
+          self.votes[opt].remove(user_id)
+
+      self.votes[option].add(user_id)
+
+      desc = "New Poll! Choose your option:\n\n"
+      for opt, voters in self.votes.items():
+        desc += f"🔹 **{opt}**: {len(voters)} votes\n"
+
+      embed = interaction.message.embeds[0]
+      embed.description = desc
+      await interaction.response.edit_message(embed=embed, view=self)
+
+    return button_callback
+
+
+# --- פקודות האפליקציה (Slash Commands) ---
+
+
+@bot.tree.command(name="poll", description="Create an interactive poll")
+@app_commands.describe(question="Poll question", options="Comma-separated options")
+async def poll(interaction: discord.Interaction, question: str, options: str):
+  db.log_action(interaction.user.id, interaction.user.name, "Created a poll")
+  opts = [o.strip() for o in options.split(",")]
+  if len(opts) < 2 or len(opts) > 5:
+    await interaction.response.send_message(
+        "Please provide between 2 and 5 options separated by commas.", ephemeral=True
+    )
+    return
+
+  desc = f"**{question}**\n\n"
+  for opt in opts:
+    desc += f"🔹 **{opt}**: 0 votes\n"
+
+  embed = discord.Embed(title=question, description=desc, color=discord.Color.blue())
+  view = PollView(opts)
+  footer_text = (
+      f"Created by {interaction.user.name} | {db.data['announcement']}"
+      if db.data["announcement"]
+      else f"Created by {interaction.user.name}"
+  )
+  embed.set_footer(text=footer_text)
+
+  await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.tree.command(name="remind", description="Set a personal reminder")
+@app_commands.describe(minutes="Minutes to wait", message="Reminder content")
+async def remind(interaction: discord.Interaction, minutes: int, message: str):
+  db.log_action(interaction.user.id, interaction.user.name, f"Set reminder for {minutes}m")
+  await interaction.response.send_message(
+      f"Reminder set! I will message you in {minutes} minutes.", ephemeral=True
+  )
+
+  await asyncio.sleep(minutes * 60)
+  try:
+    await interaction.user.send(f"Reminder: {message}")
+  except Exception:
+    pass
+
+
+@bot.tree.command(name="invert", description="Invert colors of an image")
+@app_commands.describe(image="Upload an image")
+async def invert(interaction: discord.Interaction, image: discord.Attachment):
+  db.log_action(interaction.user.id, interaction.user.name, "Inverted an image")
+  if not image.content_type or not image.content_type.startswith("image/"):
+    await interaction.response.send_message(
+        "Please upload a valid image file.", ephemeral=True
+    )
+    return
+
+  await interaction.response.defer(thinking=True)
+
+  try:
+    img_bytes = await image.read()
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    inverted_img = ImageOps.invert(img)
+
+    output = io.BytesIO()
+    inverted_img.save(output, format="PNG")
+    output.seek(0)
+
+    file = discord.File(fp=output, filename="inverted.png")
+    footer = db.data["announcement"]
+    content = f"Here is your inverted image! {footer}" if footer else "Here is your inverted image!"
+    await interaction.followup.send(content=content, file=file)
+  except Exception as e:
+    await interaction.followup.send(f"Error processing image: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="to_gif", description="Convert an image to GIF")
+@app_commands.describe(image="Upload an image")
+async def to_gif(interaction: discord.Interaction, image: discord.Attachment):
+  db.log_action(interaction.user.id, interaction.user.name, "Converted image to GIF")
+  if not image.content_type or not image.content_type.startswith("image/"):
+    await interaction.response.send_message(
+        "Please upload a valid image file.", ephemeral=True
+    )
+    return
+
+  await interaction.response.defer(thinking=True)
+
+  try:
+    img_bytes = await image.read()
+    img = Image.open(io.BytesIO(img_bytes))
+
+    output = io.BytesIO()
+    img.save(output, format="GIF")
+    output.seek(0)
+
+    file = discord.File(fp=output, filename="converted.gif")
+    footer = db.data["announcement"]
+    content = f"Here is your GIF! {footer}" if footer else "Here is your GIF!"
+    await interaction.followup.send(content=content, file=file)
+  except Exception as e:
+    await interaction.followup.send(f"Error converting image: {e}", ephemeral=True)
+
+
+# --- פאנל ניהול סודי לבעלים ---
+@bot.tree.command(name="admin_panel", description="Open admin panel")
+async def admin_panel(interaction: discord.Interaction):
+  if interaction.user.id != OWNER_ID:
+    await interaction.response.send_message("You do not have permission.", ephemeral=True)
+    return
+
+  db.log_action(interaction.user.id, interaction.user.name, "Opened admin panel")
+  embed = create_admin_embed()
+  view = AdminPanelView()
+  await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@bot.tree.command(name="set_announcement", description="Set system announcement")
+@app_commands.describe(text="Announcement text")
+async def set_announcement(interaction
