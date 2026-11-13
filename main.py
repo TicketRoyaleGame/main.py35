@@ -3,14 +3,37 @@ from datetime import datetime
 import io
 import json
 import os
+from threading import Thread
+from flask import Flask
 import discord
 from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageOps
 
+# --- שרת HTTP קטן ברקע (כדי ש-Render יהיה מרוצה ויפתח פורט 8080) ---
+app = Flask("")
+
+
+@app.route("/")
+def home():
+  return "Bot is running 24/7!"
+
+
+def run_flask():
+  app.run(host="0.0.0.0", port=8080)
+
+
+def keep_alive():
+  t = Thread(target=run_flask)
+  t.start()
+
+
+# הפעלת השרת ברקע
+keep_alive()
+
 # הגדרות ראשיות - מזהה הבעלים שלך
 OWNER_ID = 961945951780630541
-TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN_HERE")  # תומך במשתני סביבה או בטוקן ישיר
+TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 DATA_FILE = "database.json"
 
@@ -170,220 +193,4 @@ def create_admin_embed():
 
   logs_text = ""
   for log in db.data["logs"][:5]:
-    logs_text += f"`{log['time']}` | **{log['name']}**: {log['action']}\n"
-  if not logs_text:
-    logs_text = "אין פעילויות רשומות כרגע."
-
-  embed.add_field(name="📋 יומן פעילות אחרון (5 שורות)", value=logs_text, inline=False)
-  return embed
-
-
-# --- סקר אינטראקטיבי ---
-class PollView(discord.ui.View):
-
-  def __init__(self, options):
-    super().__init__(timeout=180)
-    self.votes = {opt: set() for opt in options}
-
-    for opt in options:
-      button = discord.ui.Button(
-          label=opt, style=discord.ButtonStyle.secondary
-      )
-      button.callback = self.create_callback(opt)
-      self.add_item(button)
-
-  def create_callback(self, option):
-    async def button_callback(interaction: discord.Interaction):
-      user_id = interaction.user.id
-      for opt in self.votes:
-        if user_id in self.votes[opt]:
-          self.votes[opt].remove(user_id)
-
-      self.votes[option].add(user_id)
-
-      desc = "📊 **סקר חדש!** בחר באפשרות המועדפת עליך:\n\n"
-      for opt, voters in self.votes.items():
-        desc += f"🔹 **{opt}**: {len(voters)} קולות\n"
-
-      embed = interaction.message.embeds[0]
-      embed.description = desc
-      await interaction.response.edit_message(embed=embed, view=self)
-
-    return button_callback
-
-
-# --- פקודות האפליקציה (Slash Commands) ---
-
-
-@bot.tree.command(name="poll", description="צור סקר אינטראקטיבי עם כפתורים לחיצים")
-@app_commands.describe(
-    question="שאלת הסקר", options="אפשרויות מופרדות בפסיקים (למשל: תפוח,בננה)"
-)
-async def poll(interaction: discord.Interaction, question: str, options: str):
-  db.log_action(interaction.user.id, interaction.user.name, "יצר סקר")
-  opts = [o.strip() for o in options.split(",")]
-  if len(opts) < 2 or len(opts) > 5:
-    await interaction.response.send_message(
-        "❌ יש להזין בין 2 ל-5 אפשרויות מופרדות בפסיקים.", ephemeral=True
-    )
-    return
-
-  desc = f"📊 **סקר חדש: {question}**\n\n"
-  for opt in opts:
-    desc += f"🔹 **{opt}**: 0 קולות\n"
-
-  embed = discord.Embed(title=question, description=desc, color=discord.Color.blue())
-  view = PollView(opts)
-  footer_text = (
-      f"\n\n*נוצר על ידי {interaction.user.name}* | {db.data['announcement']}"
-      if db.data["announcement"]
-      else f"\n\n*נוצר על ידי {interaction.user.name}*"
-  )
-  embed.set_footer(text=footer_text)
-
-  await interaction.response.send_message(embed=embed, view=view)
-
-
-@bot.tree.command(name="remind", description="קבע תזכורת אישית לעוד מספר דקות")
-@app_commands.describe(minutes="מספר הדקות להמתנה", message="תוכן התזכורת")
-async def remind(interaction: discord.Interaction, minutes: int, message: str):
-  db.log_action(
-      interaction.user.id, interaction.user.name, f"הגדיר תזכורת ל-{minutes} דקות"
-  )
-  await interaction.response.send_message(
-      f"✅ תזכורת הוגדרה! אשלח לך הודעה פרטית עוד {minutes} דקות.", ephemeral=True
-  )
-
-  await asyncio.sleep(minutes * 60)
-  try:
-    await interaction.user.send(f"⏰ **תזכורת:** {message}")
-  except Exception:
-    pass
-
-
-@bot.tree.command(name="invert", description="הפוך צבעים (נגטיב) לתמונה שהעלית")
-@app_commands.describe(image="העלה כאן תמונה לעיבוד")
-async def invert(interaction: discord.Interaction, image: discord.Attachment):
-  db.log_action(
-      interaction.user.id, interaction.user.name, "הפעיל אפקט נגטיב על תמונה"
-  )
-  if not image.content_type or not image.content_type.startswith("image/"):
-    await interaction.response.send_message(
-        "❌ הקובץ שהועלה אינו תמונה תקינה.", ephemeral=True
-    )
-    return
-
-  await interaction.response.defer(thinking=True)
-
-  try:
-    img_bytes = await image.read()
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    inverted_img = ImageOps.invert(img)
-
-    output = io.BytesIO()
-    inverted_img.save(output, format="PNG")
-    output.seek(0)
-
-    file = discord.File(fp=output, filename="inverted.png")
-    footer = db.data["announcement"]
-    content = f"הנה התמונה ההפוכה שלך! {footer}" if footer else "הנה התמונה ההפוכה שלך!"
-    await interaction.followup.send(content=content, file=file)
-  except Exception as e:
-    await interaction.followup.send(
-        f"❌ אירעה שגיאה בעיבוד התמונה: {e}", ephemeral=True
-    )
-
-
-@bot.tree.command(name="to_gif", description="המר תמונה רגילה לקובץ GIF")
-@app_commands.describe(image="העלה תמונה להמרה")
-async def to_gif(interaction: discord.Interaction, image: discord.Attachment):
-  db.log_action(interaction.user.id, interaction.user.name, "המר תמונה ל-GIF")
-  if not image.content_type or not image.content_type.startswith("image/"):
-    await interaction.response.send_message(
-        "❌ הקובץ שהועלה אינו תמונה תקינה.", ephemeral=True
-    )
-    return
-
-  await interaction.response.defer(thinking=True)
-
-  try:
-    img_bytes = await image.read()
-    img = Image.open(io.BytesIO(img_bytes))
-
-    output = io.BytesIO()
-    img.save(output, format="GIF")
-    output.seek(0)
-
-    file = discord.File(fp=output, filename="converted.gif")
-    footer = db.data["announcement"]
-    content = f"הנה קובץ ה-GIF שלך! {footer}" if footer else "הנה קובץ ה-GIF שלך!"
-    await interaction.followup.send(content=content, file=file)
-  except Exception as e:
-    await interaction.followup.send(
-        f"❌ אירעה שגיאה בהמרת התמונה: {e}", ephemeral=True
-    )
-
-
-# --- פאנל ניהול סודי לבעלים ---
-@bot.tree.command(name="admin_panel", description="[סודי - לבעלים בלבד] פתח את פאנל הבקרה")
-async def admin_panel(interaction: discord.Interaction):
-  if interaction.user.id != OWNER_ID:
-    try:
-      owner_user = await bot.fetch_user(OWNER_ID)
-      await owner_user.send(
-          f"🚨 **התרעת אבטחה!** המשתמש `{interaction.user.name}` (ID: `{interaction.user.id}`) ניסה לגשת לפאנל הניהול."
-      )
-    except Exception:
-      pass
-
-    await interaction.response.send_message(
-        "❌ פקודה זו אינה קיימת או שאין לך הרשאה לגשת אליה.", ephemeral=True
-    )
-    return
-
-  db.log_action(interaction.user.id, interaction.user.name, "פתח את פאנל הניהול")
-  embed = create_admin_embed()
-  view = AdminPanelView()
-  await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-
-@bot.tree.command(name="set_announcement", description="[סודי] הגדר הודעת מערכת שתופיע מתחת לתשובות")
-@app_commands.describe(text="הטקסט שיופיע (השאר ריק כדי לאפס)")
-async def set_announcement(interaction: discord.Interaction, text: str = ""):
-  if interaction.user.id != OWNER_ID:
-    await interaction.response.send_message("❌ אין לך הרשאה.", ephemeral=True)
-    return
-
-  db.data["announcement"] = text
-  db.save()
-  await interaction.response.send_message(
-      f"✅ הודעת המערכת עודכנה בהצלחה ל: `{text}`", ephemeral=True
-  )
-
-
-@bot.tree.command(name="block_user", description="[סודי] חסום משתמש משימוש בבוט")
-@app_commands.describe(user_id="מספר הזיהוי (ID) של המשתמש לחסימה")
-async def block_user(interaction: discord.Interaction, user_id: str):
-  if interaction.user.id != OWNER_ID:
-    await interaction.response.send_message("❌ אין לך הרשאה.", ephemeral=True)
-    return
-
-  try:
-    uid = int(user_id)
-    if uid not in db.data["blocked"]:
-      db.data["blocked"].append(uid)
-      db.save()
-      await interaction.response.send_message(
-          f"✅ המשתמש עם ה-ID `{uid}` נחסם בהצלחה.", ephemeral=True
-      )
-    else:
-      await interaction.response.send_message(
-          "⚠️ המשתמש כבר נמצא ברשימת החסומים.", ephemeral=True
-      )
-  except ValueError:
-    await interaction.response.send_message(
-        "❌ יש להזין מספר ID תקין (ספרות בלבד).", ephemeral=True
-    )
-
-
-bot.run(TOKEN)
+    logs_text +=
